@@ -261,8 +261,8 @@ int main(int argc, char** argv) {
       }
 
       if (cloudInd % config_setting.sub_frame_num_ == 0 && cloudInd != 0) {
-        ROS_INFO("key frame idx: [%d], key cloud size: [%d]", (int)keyCloudInd,
-                 (int)key_cloud->size());
+        // ROS_INFO("key frame idx: [%d], key cloud size: [%d]", (int)keyCloudInd,
+        //          (int)key_cloud->size());
         std::vector<STDesc> stds_vec;
         std_manager->GenerateSTDescs(key_cloud, stds_vec);
 

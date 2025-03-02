@@ -55,6 +55,7 @@ std:
     descriptor_max_len: 30
     non_max_suppression_radius: 2
     std_side_resolution: 0.2
+    intensity_enhanced: true
 
 loop:
     skip_near_num: 50

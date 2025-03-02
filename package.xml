@@ -7,11 +7,11 @@
     This is a ros package combines FAST-LIO with STD loop closure detection to achieve robust LiDAR SLAM with loop closure.
   </description>
 
-  <maintainer email="shitong_2001@163.com">Tong Shi</maintainer>
+  <maintainer email="shitong_2001@163.com">S-Torin</maintainer>
 
   <license>BSD</license>
 
-  <author email="shitong_2001@163.co">Tong Shi</author>
+  <author email="shitong_2001@163.com">S-Torin</author>
 
   <buildtool_depend>catkin</buildtool_depend>
   <build_depend>geometry_msgs</build_depend>

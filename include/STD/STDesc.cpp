@@ -1,7 +1,6 @@
 #include "STDesc.h"
 void down_sampling_voxel(pcl::PointCloud<pcl::PointXYZI>& pl_feat,
                          double voxel_size) {
-  int intensity = rand() % 255;
   if (voxel_size < 0.01) {
     return;
   }
@@ -72,6 +71,7 @@ void read_parameters(ros::NodeHandle& nh, ConfigSetting& config_setting) {
   nh.param<double>("std/descriptor_max_len", config_setting.descriptor_max_len_, 30.0);
   nh.param<double>("std/non_max_suppression_radius", config_setting.non_max_suppression_radius_, 2.0);
   nh.param<double>("std/std_side_resolution", config_setting.std_side_resolution_, 0.2);
+  nh.param<bool>("std/intensity_enhanced", config_setting.intensity_enhanced_, false);
 
   // candidate search
   nh.param<int>("loop/skip_near_num", config_setting.skip_near_num_, 50);
@@ -352,8 +352,8 @@ void STDescManager::init_voxel_map(
     std::unordered_map<VOXEL_LOC, OctoTree*>& voxel_map) {
   uint plsize = input_cloud->size();
   for (uint i = 0; i < plsize; i++) {
-    Eigen::Vector3d p_c(input_cloud->points[i].x, input_cloud->points[i].y,
-                        input_cloud->points[i].z);
+    Eigen::Vector4d p_c(input_cloud->points[i].x, input_cloud->points[i].y,
+                        input_cloud->points[i].z, input_cloud->points[i].intensity);
     double loc_xyz[3];
     for (int j = 0; j < 3; j++) {
       loc_xyz[j] = p_c[j] / config_setting_.voxel_size_;
@@ -511,7 +511,7 @@ void STDescManager::corner_extractor(
                 current_octo->connect_tree_[connect_index]->plane_ptr_->normal_;
             Eigen::Vector3d projection_center =
                 current_octo->connect_tree_[connect_index]->plane_ptr_->center_;
-            std::vector<Eigen::Vector3d> proj_points;
+            std::vector<Eigen::Vector4d> proj_points;
             // proj the boundary voxel and nearby voxel onto adjacent plane
             for (auto voxel_inc : voxel_round) {
               VOXEL_LOC connect_project_position = current_position;
@@ -582,7 +582,7 @@ void STDescManager::corner_extractor(
 
 void STDescManager::extract_corner(
     const Eigen::Vector3d& proj_center, const Eigen::Vector3d proj_normal,
-    const std::vector<Eigen::Vector3d> proj_points,
+    const std::vector<Eigen::Vector4d> proj_points,
     pcl::PointCloud<pcl::PointXYZINormal>::Ptr& corner_points) {
   double resolution = config_setting_.proj_image_resolution_;
   double dis_threshold_min = config_setting_.proj_dis_min_;
@@ -614,6 +614,7 @@ void STDescManager::extract_corner(
   double dy =
       -(ay * proj_center[0] + by * proj_center[1] + cy * proj_center[2]);
   std::vector<Eigen::Vector2d> point_list_2d;
+  std::vector<double> point_list_intensity;
   for (size_t i = 0; i < proj_points.size(); i++) {
     double x = proj_points[i][0];
     double y = proj_points[i][1];
@@ -640,6 +641,7 @@ void STDescManager::extract_corner(
         cur_project[0] * ax + cur_project[1] * bx + cur_project[2] * cx + dx;
     Eigen::Vector2d p_2d(project_x, project_y);
     point_list_2d.push_back(p_2d);
+    point_list_intensity.push_back(proj_points[i][3]);
   }
   double min_x = 10;
   double max_x = -10;
@@ -671,12 +673,14 @@ void STDescManager::extract_corner(
   int y_axis_len = (int)((max_y - min_y) / resolution + segmen_base_num);
   std::vector<Eigen::Vector2d> img_container[x_axis_len][y_axis_len];
   double img_count_array[x_axis_len][y_axis_len] = {0};
+  double img_intensity_array[x_axis_len][y_axis_len] = {0};
   double gradient_array[x_axis_len][y_axis_len] = {0};
   double mean_x_array[x_axis_len][y_axis_len] = {0};
   double mean_y_array[x_axis_len][y_axis_len] = {0};
   for (int x = 0; x < x_axis_len; x++) {
     for (int y = 0; y < y_axis_len; y++) {
       img_count_array[x][y] = 0;
+      img_intensity_array[x][y] = 0;
       mean_x_array[x][y] = 0;
       mean_y_array[x][y] = 0;
       gradient_array[x][y] = 0;
@@ -690,6 +694,7 @@ void STDescManager::extract_corner(
     mean_x_array[x_index][y_index] += point_list_2d[i][0];
     mean_y_array[x_index][y_index] += point_list_2d[i][1];
     img_count_array[x_index][y_index]++;
+    img_intensity_array[x_index][y_index] += point_list_intensity[i];
     img_container[x_index][y_index].push_back(point_list_2d[i]);
   }
   // calc gradient
@@ -704,8 +709,12 @@ void STDescManager::extract_corner(
           int yy = y + y_inc;
           if (xx >= 0 && xx < x_axis_len && yy >= 0 && yy < y_axis_len) {
             if (xx != x || yy != y) {
-              if (img_count_array[xx][yy] >= 0) {
+              if (!config_setting_.intensity_enhanced_ && img_count_array[xx][yy] >= 0) {
                 gradient += img_count_array[x][y] - img_count_array[xx][yy];
+                cnt++;
+              }
+              if (config_setting_.intensity_enhanced_ && img_intensity_array[xx][yy] >= 0) {
+                gradient += img_intensity_array[x][y] - img_intensity_array[xx][yy];
                 cnt++;
               }
             }
@@ -1391,8 +1400,9 @@ void OctoTree::init_plane() {
   plane_ptr_->points_size_ = voxel_points_.size();
   plane_ptr_->radius_ = 0;
   for (auto pi : voxel_points_) {
-    plane_ptr_->covariance_ += pi * pi.transpose();
-    plane_ptr_->center_ += pi;
+    auto p = pi.head<3>();
+    plane_ptr_->covariance_ += p * p.transpose();
+    plane_ptr_->center_ += p;
   }
   plane_ptr_->center_ = plane_ptr_->center_ / plane_ptr_->points_size_;
   plane_ptr_->covariance_ =

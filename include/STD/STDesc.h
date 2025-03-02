@@ -50,6 +50,7 @@ struct ConfigSetting {
   double descriptor_max_len_ = 10;
   double non_max_suppression_radius_ = 3.0;
   double std_side_resolution_ = 0.2;
+  bool intensity_enhanced_ = false;
 
   /* for place recognition*/
   int skip_near_num_ = 50;
@@ -142,7 +143,7 @@ struct std::hash<STDesc_LOC> {
 class OctoTree {
  public:
   ConfigSetting config_setting_;
-  std::vector<Eigen::Vector3d> voxel_points_;
+  std::vector<Eigen::Vector4d> voxel_points_;
   Plane* plane_ptr_;
   int layer_;
   int octo_state_;
@@ -257,7 +258,7 @@ class STDescManager {
                         pcl::PointCloud<pcl::PointXYZINormal>::Ptr& corner_points);
   void extract_corner(const Eigen::Vector3d& proj_center,
                       const Eigen::Vector3d proj_normal,
-                      const std::vector<Eigen::Vector3d> proj_points,
+                      const std::vector<Eigen::Vector4d> proj_points,
                       pcl::PointCloud<pcl::PointXYZINormal>::Ptr& corner_points);
   void non_maxi_suppression(pcl::PointCloud<pcl::PointXYZINormal>::Ptr& corner_points);
   void build_stdesc(const pcl::PointCloud<pcl::PointXYZINormal>::Ptr& corner_points,

@@ -9,7 +9,6 @@
 #include <so3_math.h>
 #include <ros/ros.h>
 #include <Eigen/Core>
-#include "IMU_Processing.hpp"
 #include <nav_msgs/Odometry.h>
 #include <nav_msgs/Path.h>
 #include <visualization_msgs/Marker.h>
@@ -23,8 +22,10 @@
 #include <tf/transform_broadcaster.h>
 #include <geometry_msgs/Vector3.h>
 #include <livox_ros_driver/CustomMsg.h>
-#include "preprocess.h"
 #include <ikd-Tree/ikd_Tree.h>
+#include <rangenet/net.hpp>
+#include "IMU_Processing.hpp"
+#include "preprocess.h"
 
 #define INIT_TIME (0.1)
 #define LASER_POINT_COV (0.001)
@@ -51,7 +52,7 @@ double cube_len = 0, lidar_end_time = 0, first_lidar_time = 0.0;
 int effct_feat_num = 0, feats_down_size = 0, NUM_MAX_ITERATIONS = 0;
 bool point_selected_surf[100000] = {0};
 bool lidar_pushed, flg_first_scan = true, flg_exit = false, flg_EKF_inited;
-bool scan_pub_en = false, dense_pub_en = false, scan_body_pub_en = false;
+bool scan_pub_en = false, dense_pub_en = false, semantic_pub_en = false;
 int lidar_type;
 
 vector<BoxPointType> cub_needrm;
@@ -64,12 +65,15 @@ deque<sensor_msgs::Imu::ConstPtr> imu_buffer;
 
 PointCloudXYZI::Ptr featsFromMap(new PointCloudXYZI());
 PointCloudXYZI::Ptr feats_undistort(new PointCloudXYZI());
+PointCloudXYZRGB::Ptr feats_semantic(new PointCloudXYZRGB());
 PointCloudXYZI::Ptr feats_down_body(new PointCloudXYZI());
 PointCloudXYZI::Ptr feats_down_world(new PointCloudXYZI());
 PointCloudXYZI::Ptr normvec(new PointCloudXYZI(100000, 1));
 PointCloudXYZI::Ptr laserCloudOri(new PointCloudXYZI(100000, 1));
 PointCloudXYZI::Ptr corr_normvect(new PointCloudXYZI(100000, 1));
 PointCloudXYZI::Ptr _featsArray;
+
+std::unique_ptr<rangenet::Net> rnet = nullptr;
 
 pcl::VoxelGrid<PointType> downSizeFilterSurf;
 pcl::VoxelGrid<PointType> downSizeFilterMap;
@@ -120,24 +124,16 @@ void pointBodyToWorld(const Matrix<T, 3, 1>& pi, Matrix<T, 3, 1>& po) {
   po[2] = p_global(2);
 }
 
-void RGBpointBodyToWorld(PointType const* const pi, PointType* const po) {
+void RGBpointBodyToWorld(ColorPointType const* const pi, ColorPointType* const po) {
   V3D p_body(pi->x, pi->y, pi->z);
   V3D p_global(state_point.rot * (state_point.offset_R_L_I * p_body + state_point.offset_T_L_I) + state_point.pos);
 
   po->x = p_global(0);
   po->y = p_global(1);
   po->z = p_global(2);
-  po->intensity = pi->intensity;
-}
-
-void RGBpointBodyLidarToIMU(PointType const* const pi, PointType* const po) {
-  V3D p_body_lidar(pi->x, pi->y, pi->z);
-  V3D p_body_imu(state_point.offset_R_L_I * p_body_lidar + state_point.offset_T_L_I);
-
-  po->x = p_body_imu(0);
-  po->y = p_body_imu(1);
-  po->z = p_body_imu(2);
-  po->intensity = pi->intensity;
+  po->r = pi->r;
+  po->g = pi->g;
+  po->b = pi->b;
 }
 
 void points_cache_collect() {
@@ -355,12 +351,9 @@ void publish_frame_world(const ros::Publisher& pubLaserCloudFull) {
   if (scan_pub_en) {
     PointCloudXYZI::Ptr laserCloudFullRes(dense_pub_en ? feats_undistort : feats_down_body);
     int size = laserCloudFullRes->points.size();
-    PointCloudXYZI::Ptr laserCloudWorld(
-        new PointCloudXYZI(size, 1));
-
+    PointCloudXYZI::Ptr laserCloudWorld(new PointCloudXYZI(size, 1));
     for (int i = 0; i < size; i++) {
-      RGBpointBodyToWorld(&laserCloudFullRes->points[i],
-                          &laserCloudWorld->points[i]);
+      pointBodyToWorld(&laserCloudFullRes->points[i], &laserCloudWorld->points[i]);
     }
 
     sensor_msgs::PointCloud2 laserCloudmsg;
@@ -373,50 +366,31 @@ void publish_frame_world(const ros::Publisher& pubLaserCloudFull) {
 
   if (pcd_save_en) {
     int size = feats_undistort->points.size();
-    PointCloudXYZI::Ptr laserCloudWorld(
-        new PointCloudXYZI(size, 1));
-
+    PointCloudXYZI::Ptr laserCloudWorld(new PointCloudXYZI(size, 1));
     for (int i = 0; i < size; i++) {
-      RGBpointBodyToWorld(&feats_undistort->points[i],
-                          &laserCloudWorld->points[i]);
+      pointBodyToWorld(&feats_undistort->points[i], &laserCloudWorld->points[i]);
     }
     *pcl_wait_save += *laserCloudWorld;
   }
 }
 
-void publish_frame_body(const ros::Publisher& pubLaserCloudFull_body) {
-  int size = feats_undistort->points.size();
-  PointCloudXYZI::Ptr laserCloudIMUBody(new PointCloudXYZI(size, 1));
-
-  for (int i = 0; i < size; i++) {
-    RGBpointBodyLidarToIMU(&feats_undistort->points[i],
-                           &laserCloudIMUBody->points[i]);
+void publish_semantic_world(const ros::Publisher& pubLaserCloudSemantic) {
+  if (pubLaserCloudSemantic.getNumSubscribers() == 0) return;
+  int32_t semantic_feat_nums = feats_semantic->points.size();
+  PointCloudXYZRGB::Ptr laserCloudWorld(new PointCloudXYZRGB(semantic_feat_nums, 1));
+  for (int i = 0; i < semantic_feat_nums; i++) {
+    RGBpointBodyToWorld(&feats_semantic->points[i], &laserCloudWorld->points[i]);
   }
-
-  sensor_msgs::PointCloud2 laserCloudmsg;
-  pcl::toROSMsg(*laserCloudIMUBody, laserCloudmsg);
+  sensor_msgs::PointCloud2 cloud_msg;
+  pcl::toROSMsg(*laserCloudWorld, cloud_msg);
   double pub_time = align_timestamp_en ? lidar_end_time - aligned_timestamp : lidar_end_time;
-  laserCloudmsg.header.stamp = ros::Time().fromSec(pub_time);
-  laserCloudmsg.header.frame_id = "body";
-  pubLaserCloudFull_body.publish(laserCloudmsg);
-}
-
-void publish_effect_world(const ros::Publisher& pubLaserCloudEffect) {
-  PointCloudXYZI::Ptr laserCloudWorld(
-      new PointCloudXYZI(effct_feat_num, 1));
-  for (int i = 0; i < effct_feat_num; i++) {
-    RGBpointBodyToWorld(&laserCloudOri->points[i],
-                        &laserCloudWorld->points[i]);
-  }
-  sensor_msgs::PointCloud2 laserCloudFullRes3;
-  pcl::toROSMsg(*laserCloudWorld, laserCloudFullRes3);
-  double pub_time = align_timestamp_en ? lidar_end_time - aligned_timestamp : lidar_end_time;
-  laserCloudFullRes3.header.stamp = ros::Time().fromSec(pub_time);
-  laserCloudFullRes3.header.frame_id = "camera_init";
-  pubLaserCloudEffect.publish(laserCloudFullRes3);
+  cloud_msg.header.stamp = ros::Time().fromSec(pub_time);
+  cloud_msg.header.frame_id = "camera_init";
+  pubLaserCloudSemantic.publish(cloud_msg);
 }
 
 void publish_map(const ros::Publisher& pubLaserCloudMap) {
+  if (pubLaserCloudMap.getNumSubscribers() == 0) return;
   sensor_msgs::PointCloud2 laserCloudMap;
   pcl::toROSMsg(*featsFromMap, laserCloudMap);
   double pub_time = align_timestamp_en ? lidar_end_time - aligned_timestamp : lidar_end_time;
@@ -502,8 +476,10 @@ void h_share_model(state_ikfom& s, esekfom::dyn_share_datastruct<double>& ekfom_
 
     if (ekfom_data.converge) {
       ikdtree.Nearest_Search(point_world, NUM_MATCH_POINTS, points_near, pointSearchSqDis);
-      point_selected_surf[i] = points_near.size() < NUM_MATCH_POINTS ? false : pointSearchSqDis[NUM_MATCH_POINTS - 1] > 5 ? false
-                                                                                                                          : true;
+      point_selected_surf[i] = points_near.size() < NUM_MATCH_POINTS
+                                   ? false
+                               : pointSearchSqDis[NUM_MATCH_POINTS - 1] > 5 ? false
+                                                                            : true;
     }
 
     if (!point_selected_surf[i]) continue;
@@ -577,7 +553,7 @@ int main(int argc, char** argv) {
   nh.param<bool>("publish/path_en", path_en, true);
   nh.param<bool>("publish/scan_publish_en", scan_pub_en, true);
   nh.param<bool>("publish/dense_publish_en", dense_pub_en, true);
-  nh.param<bool>("publish/scan_bodyframe_pub_en", scan_body_pub_en, true);
+  nh.param<bool>("publish/semantic_pub_en", semantic_pub_en, true);
   nh.param<bool>("publish/align_timestamp_en", align_timestamp_en, false);
   nh.param<int>("max_iteration", NUM_MAX_ITERATIONS, 4);
   nh.param<string>("map_file_path", map_file_path, "");
@@ -600,7 +576,6 @@ int main(int argc, char** argv) {
   nh.param<int>("preprocess/timestamp_unit", p_pre->time_unit, US);
   nh.param<int>("preprocess/scan_rate", p_pre->SCAN_RATE, 10);
   nh.param<int>("point_filter_num", p_pre->point_filter_num, 2);
-  nh.param<bool>("feature_extract_enable", p_pre->feature_enabled, false);
   nh.param<bool>("mapping/extrinsic_est_en", extrinsic_est_en, true);
   nh.param<bool>("pcd_save/pcd_save_en", pcd_save_en, false);
   nh.param<vector<double>>("mapping/extrinsic_T", extrinT, vector<double>());
@@ -612,6 +587,11 @@ int main(int argc, char** argv) {
 
   p_pre->lidar_type = lidar_type;
   cout << "p_pre->lidar_type " << p_pre->lidar_type << endl;
+
+  ROS_WARN("Loading model ... ");
+  rnet = rangenet::make_net(std::string(ROOT_DIR) + "/include/rangenet/model/darknet53");
+  rnet->verbosity(false);
+  ROS_WARN("Load model succ !!! ");
 
   path.header.stamp = ros::Time::now();
   path.header.frame_id = "camera_init";
@@ -646,8 +626,7 @@ int main(int argc, char** argv) {
                                 : nh.subscribe(lid_topic, 200000, standard_pcl_cbk);
   ros::Subscriber sub_imu = nh.subscribe(imu_topic, 200000, imu_cbk);
   ros::Publisher pubLaserCloudFull = nh.advertise<sensor_msgs::PointCloud2>("/cloud_registered", 100000);
-  ros::Publisher pubLaserCloudFull_body = nh.advertise<sensor_msgs::PointCloud2>("/cloud_registered_body", 100000);
-  ros::Publisher pubLaserCloudEffect = nh.advertise<sensor_msgs::PointCloud2>("/cloud_effected", 100000);
+  ros::Publisher pubLaserCloudSemantic = nh.advertise<sensor_msgs::PointCloud2>("/cloud_semantic", 100000);
   ros::Publisher pubLaserCloudMap = nh.advertise<sensor_msgs::PointCloud2>("/Laser_map", 100000);
   ros::Publisher pubOdomAftMapped = nh.advertise<nav_msgs::Odometry>("/Odometry", 100000);
   ros::Publisher pubPath = nh.advertise<nav_msgs::Path>("/path", 100000);
@@ -674,6 +653,49 @@ int main(int argc, char** argv) {
         ROS_WARN("No point, skip this scan!\n");
         continue;
       }
+
+      if (rnet != nullptr) {
+        std::cout << "network infer ... ";
+        double t1 = omp_get_wtime();
+        std::vector<float> values;
+        int32_t num_points = feats_undistort->size();
+        values.reserve(num_points * 4);
+        for (const auto& pt : feats_undistort->points) {
+          values.emplace_back(pt.x);
+          values.emplace_back(pt.y);
+          values.emplace_back(pt.z);
+          values.emplace_back(pt.intensity);
+        }
+        std::vector<std::vector<float>> semantic_scan = rnet->infer(values, num_points);
+        assert(semantic_scan.size() == num_points);
+        std::vector<cv::Vec3b> semantic_color;
+        std::vector<std::string> semantic_label;
+        rnet->getLabels(semantic_scan, semantic_label, semantic_color);
+        double t2 = omp_get_wtime();
+        std::cout << "cost " << (t2 - t1) * 1000. << " ms." << std::endl;
+        feats_semantic->resize(num_points);
+        int32_t j = 0;
+        for (int32_t i = 0; i < num_points; ++i) {
+          // if (semantic_label.at(i) == "car" || semantic_label.at(i) == "truck") continue;
+          feats_semantic->at(j).x = feats_undistort->points.at(i).x;
+          feats_semantic->at(j).y = feats_undistort->points.at(i).y;
+          feats_semantic->at(j).z = feats_undistort->points.at(i).z;
+          feats_semantic->at(j).r = semantic_color.at(i)(0);
+          feats_semantic->at(j).g = semantic_color.at(i)(1);
+          feats_semantic->at(j).b = semantic_color.at(i)(2);
+          ++j;
+        }
+        feats_semantic->resize(j);
+      }
+
+      int filter_down_size = 0;
+      for (int i = 0; i < feats_undistort->size(); i += p_pre->point_filter_num) {
+        feats_undistort->points[filter_down_size] = feats_undistort->points[i];
+        feats_semantic->points[filter_down_size] = feats_semantic->points[i];
+        filter_down_size++;
+      }
+      feats_undistort->resize(filter_down_size);
+      feats_semantic->resize(filter_down_size);
 
       flg_EKF_inited = (Measures.lidar_beg_time - first_lidar_time) < INIT_TIME ? false : true;
       lasermap_fov_segment();
@@ -738,7 +760,7 @@ int main(int argc, char** argv) {
 
       if (path_en) publish_path(pubPath);
       if (scan_pub_en || pcd_save_en) publish_frame_world(pubLaserCloudFull);
-      if (scan_pub_en && scan_body_pub_en) publish_frame_body(pubLaserCloudFull_body);
+      if (scan_pub_en && semantic_pub_en) publish_semantic_world(pubLaserCloudSemantic);
     }
 
     status = ros::ok();

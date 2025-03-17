@@ -5,7 +5,6 @@
 
 	<rosparam command="load" file="$(find fast_lio_std)/config/mid360.yaml" />
 
-	<param name="feature_extract_enable" type="bool" value="0"/>
 	<param name="point_filter_num" type="int" value="3"/>
 	<param name="max_iteration" type="int" value="3" />
 	<param name="filter_size_surf" type="double" value="0.5" />

@@ -57,11 +57,19 @@ find_package(PCL REQUIRED)
 find_package(Ceres REQUIRED)
 find_package(GTSAM REQUIRED QUIET)
 
+set(OpenCV_DIR "/usr/lib/x86_64-linux-gnu/cmake/opencv4")
+find_package(OpenCV 4 REQUIRED)
+
+find_package(TensorRT PATHS cmake)
+
 include_directories(
   ${catkin_INCLUDE_DIRS}
   ${EIGEN3_INCLUDE_DIR}
   ${PCL_INCLUDE_DIRS}
   ${PYTHON_INCLUDE_DIRS}
+  ${OpenCV_INCLUDE_DIRS}
+  ${CERES_INCLUDE_DIRS}
+  ${TENSORRT_INCLUDE_DIRS}
   include
 )
 
@@ -81,18 +89,31 @@ catkin_package(
   INCLUDE_DIRS
 )
 
+add_library(rangenet
+  include/rangenet/net.cpp
+  include/rangenet/netTensorRT.cpp
+)
+target_link_libraries(rangenet
+  PUBLIC
+  ${PCL_LIBRARIES}
+  ${OpenCV_LIBS}
+  ${TENSORRT_LIBRARIES}
+  yaml-cpp
+)
+
 add_executable(lio src/lio.cpp include/ikd-Tree/ikd_Tree.cpp src/preprocess.cpp)
 target_link_libraries(lio
   ${catkin_LIBRARIES}
   ${PCL_LIBRARIES}
   ${PYTHON_LIBRARIES}
+  rangenet
 )
 
 add_executable(mapping src/mapping.cpp include/STD/STDesc.cpp)
 target_link_libraries(mapping
   ${catkin_LIBRARIES}
   ${PCL_LIBRARIES}
-  ${OpenCV_LIBS}
   ${CERES_LIBRARIES}
   gtsam
+  rangenet
 )

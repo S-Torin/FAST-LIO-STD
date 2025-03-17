@@ -161,7 +161,7 @@ Visualization Manager:
           Color: 255; 255; 255
           Color Transformer: Intensity
           Decay Time: 1000
-          Enabled: true
+          Enabled: false
           Invert Rainbow: true
           Max Color: 255; 255; 255
           Min Color: 0; 0; 0
@@ -173,6 +173,34 @@ Visualization Manager:
           Size (m): 0.009999999776482582
           Style: Points
           Topic: /cloud_registered
+          Unreliable: false
+          Use Fixed Frame: true
+          Use rainbow: true
+          Value: false
+        - Alpha: 1
+          Autocompute Intensity Bounds: true
+          Autocompute Value Bounds:
+            Max Value: 15
+            Min Value: -5
+            Value: false
+          Axis: Z
+          Channel Name: intensity
+          Class: rviz/PointCloud2
+          Color: 255; 255; 255
+          Color Transformer: RGB8
+          Decay Time: 1000
+          Enabled: true
+          Invert Rainbow: true
+          Max Color: 255; 255; 255
+          Min Color: 0; 0; 0
+          Name: semanticCloud
+          Position Transformer: XYZ
+          Queue Size: 100000
+          Selectable: true
+          Size (Pixels): 1
+          Size (m): 0.009999999776482582
+          Style: Points
+          Topic: /cloud_semantic
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
@@ -370,7 +398,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/Orbit
-      Distance: 34.68572998046875
+      Distance: 68.71517944335938
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -378,17 +406,17 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: 14.55502986907959
-        Y: -14.66085433959961
-        Z: -10.582898139953613
+        X: 42.53141403198242
+        Y: -10.586400985717773
+        Z: -13.834898948669434
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.5147972106933594
+      Pitch: 0.3997959792613983
       Target Frame: global
-      Yaw: 2.357187032699585
+      Yaw: 2.907200813293457
     Saved: ~
 Window Geometry:
   Displays:
@@ -406,5 +434,5 @@ Window Geometry:
   Views:
     collapsed: true
   Width: 1917
-  X: 542
-  Y: 311
+  X: 661
+  Y: 390
